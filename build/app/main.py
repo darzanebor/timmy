@@ -134,6 +134,9 @@ def message_handler():
             client.delete_message(
                 QueueUrl=queue_url, ReceiptHandle=message.get("ReceiptHandle")
             )
+        logging.info("%s", "Chunk processed")
+        return True
+    return False
 
 if __name__ == "__main__":
     logging.basicConfig(
