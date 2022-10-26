@@ -18,9 +18,22 @@ import boto3
 import progressbar
 from torrentp import TorrentDownloader
 from botocore.exceptions import ClientError
-#from flask import Flask, request, make_response
+# from flask import Flask, request, make_response
 
-#app = Flask(__name__)
+# app = Flask(__name__)
+
+def set_local_folder(payload):
+    """ Set temporary folder path """
+    folder = env.get("TIMMY_TMP_FOLDER", "")
+    if payload["output"]["key"] == "":
+        folder += payload["input"]["name"] + "."
+        folder += hashlib.md5(
+            payload["input"]["magnet_url"].encode("utf-8")
+        ).hexdigest()
+    else:
+        folder += payload["output"]["key"]
+    return folder
+
 
 def object_check(s3_client, bucket, key):
     """ Check object existance in S3 by head request """
@@ -97,18 +110,6 @@ def upload_file(folder_path, bucket, key=None):
     return filename
 
 
-def set_local_folder(payload):
-    """ Set temporary folder path """
-    folder = env.get("TIMMY_TMP_FOLDER", "")
-    if payload["output"]["key"] == "":
-        folder += payload["input"]["name"] + "."
-        folder += hashlib.md5(
-            payload["input"]["magnet_url"].encode("utf-8")
-        ).hexdigest()
-    else:
-        folder += payload["output"]["key"]
-    return folder
-
 def message_handler():
     """ Obtain message from SQS and handle them """
     client = boto3.client(
@@ -121,8 +122,9 @@ def message_handler():
     queue_url = env.get("TIMMY_SQS_QUEUE")
     messages = client.receive_message(
         QueueUrl=queue_url,
-        MaxNumberOfMessages=int(env.get("TIMMY_SQS_CHUNK", 10)),
         WaitTimeSeconds=20,
+        MaxNumberOfMessages = int(env.get("TIMMY_SQS_CHUNK", 5)),
+        VisibilityTimeout = int(env.get("TIMMY_SQS_CHUNK", 5)) * 3600
     ).get("Messages")
     if messages is not None:
         for message in messages:
@@ -138,6 +140,7 @@ def message_handler():
         return True
     return False
 
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=env.get("LOG_LEVEL", logging.INFO), format="%(levelname)s - %(message)s"
@@ -145,3 +148,4 @@ if __name__ == "__main__":
     while 1:
         message_handler()
         time.sleep(15)
+
