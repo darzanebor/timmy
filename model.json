@@ -1,0 +1,10 @@
+{
+    "input": {
+      "name": "House.Of.The.Dragon.S01E10",
+      "magnet_url": "magnet:?xt=urn:btih:2347414D145E320A2A51C02B4530F5F5158E1A6D&dn=House.Of.The.Dragon.S01E10.WEBRip.x264-TORRENTGALAXY&tr=udp://tracker.coppersurfer.tk:6969/announce&tr=udp://tracker.openbittorrent.com:6969/announce&tr=udp://tracker.opentrackr.org:1337&tr=udp://tracker.leechers-paradise.org:6969/announce&tr=udp://tracker.dler.org:6969/announce&tr=udp://opentracker.i2p.rocks:6969/announce&tr=udp://47.ip-51-68-199.eu:6969/announce&tr=udp://tracker.internetwarriors.net:1337/announce&tr=udp://9.rarbg.to:2920/announce&tr=udp://tracker.pirateparty.gr:6969/announce&tr=udp://tracker.cyberia.is:6969/announce"
+    },
+    "output": {
+       "bucket": "torrent-bucket",
+       "key": ""
+    }
+}
