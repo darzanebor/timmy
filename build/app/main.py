@@ -134,8 +134,6 @@ def message_handler():
             client.delete_message(
                 QueueUrl=queue_url, ReceiptHandle=message.get("ReceiptHandle")
             )
-            return True
-    return False
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -144,4 +142,3 @@ if __name__ == "__main__":
     while 1:
         message_handler()
         time.sleep(15)
-
