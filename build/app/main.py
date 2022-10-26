@@ -18,7 +18,9 @@ import boto3
 import progressbar
 from torrentp import TorrentDownloader
 from botocore.exceptions import ClientError
+#from flask import Flask, request, make_response
 
+#app = Flask(__name__)
 
 def object_check(s3_client, bucket, key):
     """ Check object existance in S3 by head request """
@@ -74,12 +76,17 @@ def upload_file(folder_path, bucket, key=None):
                         widgets=widgets, maxval=statinfo.st_size
                     )
                     up_progress.start()
+
                     def upload_progress(chunk):
                         up_progress.update(up_progress.currval + chunk)
+
                     if key is None:
                         key = local_path
                     s3_client.upload_file(
-                        local_path, Bucket=bucket, Key=local_path, Callback=upload_progress
+                        local_path,
+                        Bucket=bucket,
+                        Key=local_path,
+                        Callback=upload_progress,
                     )
                     remove(local_path)
         rmdir(root)
@@ -101,7 +108,6 @@ def set_local_folder(payload):
     else:
         folder += payload["output"]["key"]
     return folder
-
 
 def message_handler():
     """ Obtain message from SQS and handle them """
@@ -131,11 +137,11 @@ def message_handler():
             return True
     return False
 
-
 if __name__ == "__main__":
     logging.basicConfig(
-        level=env.get("LOG_LEVEL", 20), format="%(levelname)s - %(message)s"
+        level=env.get("LOG_LEVEL", logging.INFO), format="%(levelname)s - %(message)s"
     )
     while 1:
         message_handler()
-        time.sleep(5)
+        time.sleep(15)
+
