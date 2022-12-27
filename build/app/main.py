@@ -1,80 +1,75 @@
 #!/usr/bin/env python3
-""" video handler
+""" torrent handler """
+"""
 Environment:
   AWS_ENDPOINT
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
+  TIMMY_UPLOAD_BUCKET
   TIMMY_SQS_ENDPOINT
   TIMMY_SQS_QUEUE
   TIMMY_TMP_FOLDER
   TIMMY_SQS_CHUNK
 """
-import time
 from os import path, walk, stat, remove, rmdir, environ as env
 import hashlib
 import json
 import logging
+import asyncio
 import boto3
+
 import progressbar
+from torf import Magnet, URLError, MagnetError
 from torrentp import TorrentDownloader
 from botocore.exceptions import ClientError
-# from flask import Flask, request, make_response
+from botocore.config import Config as botoConfig
 
-# app = Flask(__name__)
 
-def set_local_folder(payload):
+def get_download_path(torrent_name):
     """ Set temporary folder path """
-    folder = env.get("TIMMY_TMP_FOLDER", "")
-    if payload["output"]["key"] == "":
-        folder += payload["input"]["name"] + "."
-        folder += hashlib.md5(
-            payload["input"]["magnet_url"].encode("utf-8")
-        ).hexdigest()
-    else:
-        folder += payload["output"]["key"]
-    return folder
+    return (
+        env.get("TIMMY_TMP_FOLDER", "")
+        + torrent_name
+        + "."
+        + hashlib.md5(torrent_name.encode("utf-8")).hexdigest()
+    )
 
 
-def object_check(s3_client, bucket, key):
+def object_check(client, bucket, key):
     """ Check object existance in S3 by head request """
     try:
-        s3_client.head_object(Bucket=bucket, Key=key)
+        client.head_object(Bucket=bucket, Key=key)
+        return True
     except ClientError as error:
         if int(error.response["Error"]["Code"]) != 404:
             logging.error("%s", error)
         return False
-    return True
 
 
-def download_torrent(magnet, folder):
+async def download_torrent(magnet, folder):
     """ Download torrent file """
     try:
         torrent_file = TorrentDownloader(magnet, folder)
         torrent_file.start_download()
     except Exception as error:
         logging.error("%s", error)
-        return False
-    return True
 
 
-def upload_file(folder_path, bucket, key=None):
+async def s3_upload(local_folder, upload_bucket, prefix=None):
     """ Upload a file to an S3 bucket """
     try:
-        s3_client = boto3.session.Session().client(
-            service_name="s3",
-            endpoint_url=env.get("AWS_ENDPOINT"),
-            aws_access_key_id=env.get("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=env.get("AWS_SECRET_ACCESS_KEY"),
-        )
-        for root, dirs, files in walk(folder_path):
+        for root, dirs, files in walk(local_folder):
             for filename in files:
-                local_path = path.join(root, filename)
-                if object_check(s3_client, bucket, local_path):
+                file_path = path.join(root, filename)
+                file_key = file_path.replace(local_folder + "/", "")
+                if prefix:
+                    file_key = prefix + "/" + file_key
+                if object_check(s3_client, upload_bucket, file_key):
                     logging.info("%s already in bucket", filename)
-                    remove(local_path)
+                    remove(file_path)
                 else:
-                    logging.info("Uploading: %s", filename)
-                    statinfo = stat(local_path)
+                    logging.info("Uploading: %s ", filename)
+                    statinfo = stat(file_path)
                     widgets = [
                         "Uploading: " + filename + " : ",
                         progressbar.Percentage(),
@@ -93,59 +88,86 @@ def upload_file(folder_path, bucket, key=None):
                     def upload_progress(chunk):
                         up_progress.update(up_progress.currval + chunk)
 
-                    if key is None:
-                        key = local_path
                     s3_client.upload_file(
-                        local_path,
-                        Bucket=bucket,
-                        Key=local_path,
+                        file_path,
+                        Bucket=upload_bucket,
+                        Key=file_key,
                         Callback=upload_progress,
                     )
-                    remove(local_path)
+                    remove(file_path)
         rmdir(root)
-        s3_client._endpoint.http_session.close()
     except ClientError as error:
         logging.error("%s", error)
-        return False
-    return filename
 
 
-def message_handler():
+async def message_handler():
     """ Obtain message from SQS and handle them """
-    client = boto3.client(
+    try:
+        queue_url = env.get("TIMMY_SQS_QUEUE")
+        messages = sqs_client.receive_message(
+            QueueUrl=queue_url,
+            WaitTimeSeconds=20,
+            MaxNumberOfMessages=int(env.get("TIMMY_SQS_CHUNK", 5)),
+            VisibilityTimeout=int(env.get("TIMMY_SQS_CHUNK", 1)) * 3600,
+        ).get("Messages")
+        if messages is not None:
+            for message in messages:
+                magnet_url = message.get("Body")
+                magnet_link_obj = Magnet.from_string(magnet_url)
+                download_path = get_download_path(magnet_link_obj.torrent().name)
+                sqs_client.delete_message(
+                    QueueUrl=queue_url, ReceiptHandle=message.get("ReceiptHandle")
+                )
+                await download_torrent(magnet_url, download_path)
+                await s3_upload(
+                    download_path, env.get("TIMMY_UPLOAD_BUCKET")
+                )
+                logging.info("Message processed: %s", message.get("MessageId"))
+            logging.info("%s", "Chunk processed")
+    except (URLError, MagnetError, ClientError) as error:
+        logging.error("%s", error)
+
+
+async def sqs_init():
+    """ init SQS client """
+    global sqs_client
+    sqs_client = boto3.client(
         service_name="sqs",
         endpoint_url=env.get("TIMMY_SQS_ENDPOINT"),
         aws_access_key_id=env.get("AWS_ACCESS_KEY_ID"),
         aws_secret_access_key=env.get("AWS_SECRET_ACCESS_KEY"),
         region_name="ru-central1",
+        config=botoConfig(connect_timeout=30, read_timeout=90),
     )
-    queue_url = env.get("TIMMY_SQS_QUEUE")
-    messages = client.receive_message(
-        QueueUrl=queue_url,
-        WaitTimeSeconds=20,
-        MaxNumberOfMessages = int(env.get("TIMMY_SQS_CHUNK", 5)),
-        VisibilityTimeout = int(env.get("TIMMY_SQS_CHUNK", 5)) * 3600
-    ).get("Messages")
-    if messages is not None:
-        for message in messages:
-            payload = json.loads(message.get("Body"))
-            folder = set_local_folder(payload)
-            download_torrent(payload["input"]["magnet_url"], folder)
-            upload_file(folder, payload["output"]["bucket"])
-            logging.info("Message processed: %s", message.get("MessageId"))
-            client.delete_message(
-                QueueUrl=queue_url, ReceiptHandle=message.get("ReceiptHandle")
-            )
-        logging.info("%s", "Chunk processed")
-        return True
-    return False
+
+
+async def s3_init():
+    """ init S3 client """
+    global s3_client
+    s3_client = boto3.client(
+        service_name="s3",
+        endpoint_url=env.get("AWS_ENDPOINT"),
+        aws_access_key_id=env.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=env.get("AWS_SECRET_ACCESS_KEY"),
+        config=botoConfig(connect_timeout=30, read_timeout=90),
+    )
+
+
+async def default_handler():
+    """ default handler """
+    logging.info("%s", "Ready to handle messages in queue")
+    while True:
+        await message_handler()
+        await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=env.get("LOG_LEVEL", logging.INFO), format="%(levelname)s - %(message)s"
+        level=logging.getLevelName(env.get("LOG_LEVEL", "INFO")),
+        format="TIMMY - %(levelname)s - %(asctime)s - %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
-    while 1:
-        message_handler()
-        time.sleep(15)
+    asyncio.run(s3_init())
+    asyncio.run(sqs_init())
+    asyncio.run(default_handler())
 
